@@ -182,16 +182,7 @@ RemoveBufferOnStart(BufferDesc* buf) {
 	uint32 local_bufprev_state;
 	uint32 local_curmaster_state;
 	bool success;
-	/*if (rand()%50000 == 937 && rand()%10 == 8)
-	{
-		// SHOULD NOT HAPPEN DUE TO ALGORITHM!!!!!!!!!!!!!!!!!!!!!!!!!!! (=> 3/8 of logical tail are pinned)
-		int i = StrategyControl->firstBufferLogical;
-		for (; i != -1;i=GetBufferDescriptor(i)->id_of_next) {
-			printf("%i.%i.%i.",GetBufferDescriptor(i)->buf_id,GetBufferDescriptor(i)->id_of_prev, GetBufferDescriptor(i)->id_of_next);if (GetBufferDescriptor(i)->beforeMid) printf("1 \n"); else printf("0 \n");
-		}
-		printf("KOB: %i %i %i\n\n\n\n", StrategyControl->firstBufferLogical, StrategyControl->separatingBufferLogical, StrategyControl->lastBufferLogical);
-		fflush(stdout);
-	}*/
+	
 	while (true) {
 		SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 		
@@ -204,10 +195,6 @@ RemoveBufferOnStart(BufferDesc* buf) {
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 			return;
 		}
-		
-		//if (buf->id_of_next == NO_LOGICAL_NEIGHBOUR) {
-		//	fprintf(stderr, "opanki, it is interesing\n");
-		//}
 		
 		currentMaster = GetBufferDescriptor(StrategyControl->firstBufferLogical);
 		currentSeparatingBuffer = GetBufferDescriptor(StrategyControl->separatingBufferLogical);
@@ -222,16 +209,6 @@ RemoveBufferOnStart(BufferDesc* buf) {
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 			return;
 		}
-
-		/*if (buf_next->buf_id < buf_prev->buf_id) {
-			local_bufnext_state = LockBufHdr(buf_next);
-			local_bufprev_state = LockBufHdr(buf_prev);
-		}
-		else
-		{	
-			local_bufprev_state = LockBufHdr(buf_prev);
-			local_bufnext_state = LockBufHdr(buf_next);
-		}*/
 		
 		if (buf_next != NULL)
 		{
@@ -249,46 +226,19 @@ RemoveBufferOnStart(BufferDesc* buf) {
 		}
 		else
 		{
-		
-	/*printf("POGNALI!!\n");
-	int co = 0;
-	BufferDesc *tempBuf;
-	for (int victimCandidate = StrategyControl->firstBufferLogical; victimCandidate != -1; victimCandidate = tempBuf->id_of_next) {
-		if (victimCandidate >= 0) 
-			tempBuf = GetBufferDescriptor(victimCandidate);
-		printf("%i.%i-%i.%i:%i\n", victimCandidate, BUF_STATE_GET_REFCOUNT(pg_atomic_read_u32(&tempBuf->state)), tempBuf->id_of_prev, tempBuf->id_of_next, co++);
-	}
-	printf("UTA bufid%i prevbuf%i cm%i first%i last%i\n", buf->buf_id, buf_prev->buf_id, currentMaster->buf_id, StrategyControl->firstBufferLogical, StrategyControl->lastBufferLogical);
-	fflush(stdout);*/
-	
-			
 			buf_prev->id_of_next = NO_LOGICAL_NEIGHBOUR;
 			StrategyControl->lastBufferLogical = buf_prev->buf_id;
 	
 			success = true;
 		}
-		/*if (buf_next->buf_id < buf_prev->buf_id) {
-			UnlockBufHdr(buf_next, local_bufnext_state);
-			UnlockBufHdr(buf_prev, local_bufprev_state);
-		}
-		else
-		{
-			UnlockBufHdr(buf_prev, local_bufprev_state);
-			UnlockBufHdr(buf_next, local_bufnext_state);
-		}*/
 		
 		if (!success) {
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
-			elog(ERROR, "not success");
 			continue;
 		}
-	
-		//local_curmaster_state = LockBufHdr(currentMaster);
+		
 		if (StrategyControl->firstBufferLogical != currentMaster->buf_id) {
-			//UnlockBufHdr(currentMaster, local_curmaster_state);
-			
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
-			elog(ERROR, "NOOOOOOOO");
 			continue;
 		}
 		
@@ -555,12 +505,7 @@ if (rand()%500 == 78) {
 	victimCandidate = StrategyControl->lastBufferLogical;
 	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 	for (;;)
-	{
-		if (victimCandidate == -1) 
-		{
-			elog(ERROR, "VICTIM CANDIDATE IS OUT OF RANGE((((((((((((((");
-		}
-		
+	{		
 		buf = GetBufferDescriptor(victimCandidate);
 
 		/*
@@ -607,13 +552,25 @@ if (rand()%500 == 78) {
 				 */
 				UnlockBufHdr(buf, local_buf_state);
 				
-				elog(ERROR, "no unpinned buffers available id: %p heh");
+				elog(ERROR, "no unpinned buffers available id");
 			}
 			SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 			victimCandidate = buf->id_of_prev;
 			if (victimCandidate == -1)
 			{
-				victimCandidate = rand() % NBuffers;//StrategyControl->lastBufferLogical;
+				int rollfront = rand() % 100;
+				if (NBuffers < 500) 
+				{
+					victimCandidate = rand() % NBuffers;
+				}
+				else
+				{
+					victimCandidate = StrategyControl->lastBufferLogical;
+					for (int i = 1; i < rollfront; ++i) 
+					{
+						victimCandidate = GetBufferDescriptor(victimCandidate)->id_of_prev;
+					}
+				}
 			}
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 		}
