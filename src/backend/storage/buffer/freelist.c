@@ -205,9 +205,9 @@ RemoveBufferOnStart(BufferDesc* buf) {
 			return;
 		}
 		
-		if (buf->id_of_next == NO_LOGICAL_NEIGHBOUR) {
-			fprintf(stderr, "opanki, it is interesing\n");
-		}
+		//if (buf->id_of_next == NO_LOGICAL_NEIGHBOUR) {
+		//	fprintf(stderr, "opanki, it is interesing\n");
+		//}
 		
 		currentMaster = GetBufferDescriptor(StrategyControl->firstBufferLogical);
 		currentSeparatingBuffer = GetBufferDescriptor(StrategyControl->separatingBufferLogical);
@@ -253,9 +253,22 @@ RemoveBufferOnStart(BufferDesc* buf) {
 		}
 		else
 		{
+		
+	/*printf("POGNALI!!\n");
+	int co = 0;
+	BufferDesc *tempBuf;
+	for (int victimCandidate = StrategyControl->firstBufferLogical; victimCandidate != -1; victimCandidate = tempBuf->id_of_next) {
+		if (victimCandidate >= 0) 
+			tempBuf = GetBufferDescriptor(victimCandidate);
+		printf("%i.%i-%i.%i:%i\n", victimCandidate, BUF_STATE_GET_REFCOUNT(pg_atomic_read_u32(&tempBuf->state)), tempBuf->id_of_prev, tempBuf->id_of_next, co++);
+	}
+	printf("UTA bufid%i prevbuf%i cm%i first%i last%i\n", buf->buf_id, buf_prev->buf_id, currentMaster->buf_id, StrategyControl->firstBufferLogical, StrategyControl->lastBufferLogical);
+	fflush(stdout);*/
+	
+			
 			buf_prev->id_of_next = NO_LOGICAL_NEIGHBOUR;
 			StrategyControl->lastBufferLogical = buf_prev->buf_id;
-			
+	
 			success = true;
 		}
 		/*if (buf_next->buf_id < buf_prev->buf_id) {
@@ -280,6 +293,8 @@ RemoveBufferOnStart(BufferDesc* buf) {
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 			continue;
 		}
+		
+		buf->id_of_prev = NO_LOGICAL_NEIGHBOUR;
 		buf->id_of_next = StrategyControl->firstBufferLogical;
 		currentMaster->id_of_prev = buf->buf_id;
 		//UnlockBufHdr(currentMaster, local_curmaster_state);
@@ -522,6 +537,21 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 		}
 	}
 
+
+SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+if (GetBufferDescriptor(StrategyControl->firstBufferLogical)->id_of_prev != -1)
+{
+	printf("\n\n\nlbl%i fbl%i LLLLL\n", StrategyControl->lastBufferLogical, StrategyControl->firstBufferLogical);
+	int co = 0;
+	for (victimCandidate = StrategyControl->firstBufferLogical; victimCandidate != -1; victimCandidate = tempBuf->id_of_next) {
+		if (victimCandidate >= 0) 
+			tempBuf = GetBufferDescriptor(victimCandidate);
+		fprintf(stderr, "%i.%i-%i.%i:%i\n", victimCandidate, BUF_STATE_GET_REFCOUNT(pg_atomic_read_u32(&tempBuf->state)), tempBuf->id_of_prev, tempBuf->id_of_next, co++);
+	}
+	fflush(stdout);
+	return GetBufferDescriptor(StrategyControl->firstBufferLogical);
+}	
+SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 	/* Nothing on the freelist, so run the "clock sweep" algorithm */
 	trycounter = NBuffers;
 	victimCandidate = StrategyControl->lastBufferLogical;
@@ -575,10 +605,11 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 				SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 				victimCandidate = StrategyControl->firstBufferLogical;
 				tempBuf = GetBufferDescriptor(victimCandidate);
+				int count = 0;
 				for (; victimCandidate != -1; victimCandidate = tempBuf->id_of_next) {
 					if (victimCandidate >= 0) 
 						tempBuf = GetBufferDescriptor(victimCandidate);
-					fprintf(stderr, "%i.%i-", victimCandidate, BUF_STATE_GET_REFCOUNT(pg_atomic_read_u32(&tempBuf->state)));
+					fprintf(stderr, "%i.%i-%i.%i:%i\n", victimCandidate, BUF_STATE_GET_REFCOUNT(pg_atomic_read_u32(&tempBuf->state)), tempBuf->id_of_prev, tempBuf->id_of_next, count++);
 				}
 				fprintf(stderr, "\nfbl:%i lbl:%i\n\n", StrategyControl->firstBufferLogical, StrategyControl->lastBufferLogical);
 				SpinLockRelease(&StrategyControl->buffer_strategy_lock);
