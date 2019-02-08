@@ -50,6 +50,8 @@ typedef struct
 	int firstBufferLogical;
 	int lastBufferLogical;
 
+	pg_atomic_uint32 curVictim;
+
 	/*
 	 * Statistics.  These counters should be wide enough that they can't
 	 * overflow during a single bgwriter cycle.
@@ -170,6 +172,21 @@ ClockSweepTick(void)
 		}
 	}
 	return victim;
+}
+
+static inline uint32
+ClockSweepTick2(void)
+{
+	uint32		oldVictim;
+	uint32		newVictim;
+	bool success = false;
+	
+	while (!success) { 
+		oldVictim = pg_atomic_read_u32(&StrategyControl->curVictim);
+		newVictim = (oldVictim + 1) % (NBuffers / 8);
+		success = pg_atomic_compare_exchange_u32(&StrategyControl->curVictim, &oldVictim, newVictim);
+	}
+	return newVictim;
 }
 
 void
@@ -370,6 +387,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 	uint32		local_buf_state;	/* to avoid repeated (de-)referencing */
 	int victimCandidate;
 	BufferDesc *tempBuf;
+	pg_atomic_uint32 curVictim;
 	
 	/*
 	 * If given a strategy object, see whether it can select a buffer. We
@@ -555,10 +573,12 @@ if (rand()%500 == 78) {
 				elog(ERROR, "no unpinned buffers available id");
 			}
 			SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
-			victimCandidate = buf->id_of_prev;
+			victimCandidate = (ClockSweepTick2() + (NBuffers * 7 / 8)) % NBuffers;
+			
+			/*victimCandidate = buf->id_of_prev;
 			if (victimCandidate == -1)
 			{
-				int rollfront = rand() % 100;
+				int rollfront = rand() % 500;
 				if (NBuffers < 500) 
 				{
 					victimCandidate = rand() % NBuffers;
@@ -571,7 +591,8 @@ if (rand()%500 == 78) {
 						victimCandidate = GetBufferDescriptor(victimCandidate)->id_of_prev;
 					}
 				}
-			}
+			}*/
+			
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 		}
 		UnlockBufHdr(buf, local_buf_state);
@@ -740,7 +761,8 @@ StrategyInitialize(bool init)
 
 		/* Initialize the clock sweep pointer */
 		pg_atomic_init_u32(&StrategyControl->nextVictimBuffer, 0);
-
+		pg_atomic_init_u32(&StrategyControl->curVictim, NBuffers * 7 / 8);
+		
 		/* Clear statistics */
 		StrategyControl->completePasses = 0;
 		pg_atomic_init_u32(&StrategyControl->numBufferAllocs, 0);
