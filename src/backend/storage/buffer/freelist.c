@@ -183,7 +183,10 @@ ClockSweepTick2(void)
 	
 	while (!success) { 
 		oldVictim = pg_atomic_read_u32(&StrategyControl->curVictim);
-		newVictim = (oldVictim + 1) % (NBuffers / 8);
+		newVictim = GetBufferDescriptor(oldVictim)->id_of_next;
+		if (newVictim == NO_LOGICAL_NEIGHBOUR) {
+			newVictim = StrategyControl->separatingBufferLogical;
+		}
 		success = pg_atomic_compare_exchange_u32(&StrategyControl->curVictim, &oldVictim, newVictim);
 	}
 	return newVictim;
