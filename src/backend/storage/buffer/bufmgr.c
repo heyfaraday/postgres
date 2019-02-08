@@ -1051,10 +1051,10 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				*foundPtr = false;
 			}
 		}
-		else
-		{
-			RemoveBufferOnStart(buf);
-		}
+		//else
+		//{
+			//RemoveBufferOnStart(buf);
+		//}
 
 		return buf;
 	}
