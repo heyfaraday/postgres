@@ -406,9 +406,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 	int			trycounter;
 	uint32		local_buf_state;	/* to avoid repeated (de-)referencing */
 	int victimCandidate;
-	int pid;
-	
-	pid = getpid();
+	BufferDesc *tempBuf;
 	
 	/*
 	 * If given a strategy object, see whether it can select a buffer. We
@@ -574,7 +572,17 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 				 * infinite loop.
 				 */
 				UnlockBufHdr(buf, local_buf_state);
-				elog(ERROR, "no unpinned buffers available YA HZ qqq3");
+				SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+				victimCandidate = StrategyControl->firstBufferLogical;
+				tempBuf = GetBufferDescriptor(victimCandidate);
+				for (; victimCandidate != -1; victimCandidate = tempBuf->id_of_next) {
+					if (victimCandidate >= 0) 
+						tempBuf = GetBufferDescriptor(victimCandidate);
+					fprintf(stderr, "%i.%i-", victimCandidate, BUF_STATE_GET_REFCOUNT(pg_atomic_read_u32(&tempBuf->state)));
+				}
+				fprintf(stderr, "\nfbl:%i lbl:%i\n\n", StrategyControl->firstBufferLogical, StrategyControl->lastBufferLogical);
+				SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+				elog(ERROR, "no unpinned buffers available id: %p");
 			}
 			SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 			victimCandidate = buf->id_of_prev;
