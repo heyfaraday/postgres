@@ -406,6 +406,9 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 	int			trycounter;
 	uint32		local_buf_state;	/* to avoid repeated (de-)referencing */
 	int victimCandidate;
+	int pid;
+	
+	pid = getpid();
 	
 	/*
 	 * If given a strategy object, see whether it can select a buffer. We
@@ -526,10 +529,6 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 	victimCandidate = StrategyControl->lastBufferLogical;
 	for (;;)
 	{
-		for (int i = victimCandidate; i >= 0; i = GetBufferDescriptor(i)->id_of_next) {
-			fprintf(stderr, "%i\n", i);
-		}
-		fprintf(stderr,"\n");fflush(stdout);
 		buf = GetBufferDescriptor(victimCandidate);
 
 		/*
@@ -540,7 +539,6 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 
 		if (BUF_STATE_GET_REFCOUNT(local_buf_state) == 0)
 		{
-			//printf("%i->%i,%i ", victimCandidate, buf->id_of_prev, StrategyControl->separatingBufferLogical);
 			if (BUF_STATE_GET_USAGECOUNT(local_buf_state) != 0)
 			{
 				local_buf_state -= BUF_USAGECOUNT_ONE;
@@ -557,7 +555,6 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 				if (strategy != NULL)
 					AddBufferToRing(strategy, buf);
 				*buf_state = local_buf_state;
-				//printf("=",buf->buf_id, StrategyControl->separatingBufferLogical);fflush(stdout);
 				
 				RemoveBufferOnStart(buf);
 
@@ -566,6 +563,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 		}
 		else 
 		{
+			
 			if (--trycounter == 0)
 			{
 				/*
@@ -576,12 +574,13 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 				 * infinite loop.
 				 */
 				UnlockBufHdr(buf, local_buf_state);
-				elog(ERROR, "no unpinned buffers available YA HZ qqq2");
+				elog(ERROR, "no unpinned buffers available YA HZ qqq3");
 			}
+			SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 			victimCandidate = buf->id_of_prev;
+			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 		}
 		UnlockBufHdr(buf, local_buf_state);
-		//printf(":");fflush(stdout);
 	}
 }
 
