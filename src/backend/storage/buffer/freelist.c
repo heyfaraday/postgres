@@ -546,6 +546,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 				local_buf_state -= BUF_USAGECOUNT_ONE;
 
 				trycounter = NBuffers;
+				victimCandidate = StrategyControl->lastBufferLogical;
 			}
 			else
 			{
@@ -572,7 +573,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 				 * infinite loop.
 				 */
 				UnlockBufHdr(buf, local_buf_state);
-				elog(ERROR, "no unpinned buffers available YA HZ");
+				elog(ERROR, "no unpinned buffers available YA HZ qqq");
 			}
 			victimCandidate = buf->id_of_prev;
 		}
