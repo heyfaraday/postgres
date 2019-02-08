@@ -576,25 +576,7 @@ if (rand()%500 == 78) {
 				elog(ERROR, "no unpinned buffers available id");
 			}
 			SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
-			victimCandidate = (ClockSweepTick2() + (NBuffers * 7 / 8)) % NBuffers;
-			
-			/*victimCandidate = buf->id_of_prev;
-			if (victimCandidate == -1)
-			{
-				int rollfront = rand() % 500;
-				if (NBuffers < 500) 
-				{
-					victimCandidate = rand() % NBuffers;
-				}
-				else
-				{
-					victimCandidate = StrategyControl->lastBufferLogical;
-					for (int i = 1; i < rollfront; ++i) 
-					{
-						victimCandidate = GetBufferDescriptor(victimCandidate)->id_of_prev;
-					}
-				}
-			}*/
+			victimCandidate = ClockSweepTick2() % NBuffers;
 			
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 		}
