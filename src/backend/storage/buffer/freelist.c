@@ -613,18 +613,7 @@ if (rand()%500 == 78) {
 			victimCandidate = buf->id_of_prev;
 			if (victimCandidate == -1)
 			{
-				victimCandidate = StrategyControl->firstBufferLogical;
-				tempBuf = GetBufferDescriptor(victimCandidate);
-				int count = 0;
-				for (; victimCandidate != -1; victimCandidate = tempBuf->id_of_next) {
-					if (victimCandidate >= 0) 
-						tempBuf = GetBufferDescriptor(victimCandidate);
-					fprintf(stderr, "%i->%i.%i:%i\n", victimCandidate, tempBuf->id_of_prev, tempBuf->id_of_next, count++);
-				}
-				fprintf(stderr, "\nfirst:%i last:%i current:%i\n\n", StrategyControl->firstBufferLogical, StrategyControl->lastBufferLogical, buf->buf_id);
-				fflush(stderr);
-				SpinLockRelease(&StrategyControl->buffer_strategy_lock);
-				elog(ERROR, "TRINDEC");
+				victimCandidate = StrategyControl->lastBufferLogical;
 			}
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 		}
