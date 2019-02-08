@@ -534,10 +534,26 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 
 		}
 	}
+/*
+if (rand()%500 == 78) {
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+	victimCandidate = StrategyControl->firstBufferLogical;
+	tempBuf = GetBufferDescriptor(victimCandidate);
+	int count = 0;
+	for (; victimCandidate != -1; victimCandidate = tempBuf->id_of_next) {
+		if (victimCandidate >= 0) 
+			tempBuf = GetBufferDescriptor(victimCandidate);
+		fprintf(stderr, "%i.%i-%i.%i:%i\n", victimCandidate, BUF_STATE_GET_REFCOUNT(pg_atomic_read_u32(&tempBuf->state)), tempBuf->id_of_prev, tempBuf->id_of_next, count++);
+	}
+	fprintf(stderr, "\nfbl:%i lbl:%i\n\n", StrategyControl->firstBufferLogical, StrategyControl->lastBufferLogical);
+	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+}*/
 
 	/* Nothing on the freelist, so run the "clock sweep" algorithm */
 	trycounter = NBuffers;
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 	victimCandidate = StrategyControl->lastBufferLogical;
+	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 	for (;;)
 	{
 		if (victimCandidate == -1) 
@@ -590,22 +606,26 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 				 * infinite loop.
 				 */
 				UnlockBufHdr(buf, local_buf_state);
-				/*SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+				
+				elog(ERROR, "no unpinned buffers available id: %p heh");
+			}
+			SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+			victimCandidate = buf->id_of_prev;
+			if (victimCandidate == -1)
+			{
 				victimCandidate = StrategyControl->firstBufferLogical;
 				tempBuf = GetBufferDescriptor(victimCandidate);
 				int count = 0;
 				for (; victimCandidate != -1; victimCandidate = tempBuf->id_of_next) {
 					if (victimCandidate >= 0) 
 						tempBuf = GetBufferDescriptor(victimCandidate);
-					fprintf(stderr, "%i.%i-%i.%i:%i\n", victimCandidate, BUF_STATE_GET_REFCOUNT(pg_atomic_read_u32(&tempBuf->state)), tempBuf->id_of_prev, tempBuf->id_of_next, count++);
+					fprintf(stderr, "%i->%i.%i:%i\n", victimCandidate, tempBuf->id_of_prev, tempBuf->id_of_next, count++);
 				}
-				fprintf(stderr, "\nfbl:%i lbl:%i\n\n", StrategyControl->firstBufferLogical, StrategyControl->lastBufferLogical);
-				SpinLockRelease(&StrategyControl->buffer_strategy_lock);*/
-				
-				elog(ERROR, "no unpinned buffers available id: %p heh");
+				fprintf(stderr, "\nfirst:%i last:%i current:%i\n\n", StrategyControl->firstBufferLogical, StrategyControl->lastBufferLogical, buf->buf_id);
+				fflush(stderr);
+				SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+				elog(ERROR, "TRINDEC");
 			}
-			SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
-			victimCandidate = buf->id_of_prev;
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 		}
 		UnlockBufHdr(buf, local_buf_state);
