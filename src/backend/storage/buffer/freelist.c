@@ -548,7 +548,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 				*buf_state = local_buf_state;
 				//printf("=",buf->buf_id, StrategyControl->separatingBufferLogical);fflush(stdout);
 				
-				RemoveBufferOnSeparatingPosition(buf);
+				RemoveBufferOnStart(buf);
 
 				return buf;
 			}
