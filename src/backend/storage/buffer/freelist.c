@@ -204,7 +204,11 @@ RemoveBufferOnStart(BufferDesc* buf) {
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 			return;
 		}
-	
+		
+		if (buf->id_of_next == NO_LOGICAL_NEIGHBOUR) {
+			fprintf(stderr, "opanki, it is interesing\n");
+		}
+		
 		currentMaster = GetBufferDescriptor(StrategyControl->firstBufferLogical);
 		currentSeparatingBuffer = GetBufferDescriptor(StrategyControl->separatingBufferLogical);
 		if (buf->id_of_next >= 0)
@@ -218,7 +222,11 @@ RemoveBufferOnStart(BufferDesc* buf) {
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 			return;
 		}
-	
+		
+		if (StrategyControl->firstBufferLogical == StrategyControl->separatingBufferLogical) {
+			fprintf(stderr, "firstBufferLogical == separatingBufferLogical\n");
+		}
+
 		/*if (buf_next->buf_id < buf_prev->buf_id) {
 			local_bufnext_state = LockBufHdr(buf_next);
 			local_bufprev_state = LockBufHdr(buf_prev);
@@ -318,7 +326,6 @@ RemoveBufferOnSeparatingPosition(BufferDesc* buf) {
 		|| buf->id_of_prev == StrategyControl->separatingBufferLogical
 	) 
 	{
-		//printf("+");fflush(stdout);
 		SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 		return;
 	}
@@ -565,7 +572,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 				 * infinite loop.
 				 */
 				UnlockBufHdr(buf, local_buf_state);
-				elog(ERROR, "no unpinned buffers available");
+				elog(ERROR, "no unpinned buffers available YA HZ");
 			}
 			victimCandidate = buf->id_of_prev;
 		}
