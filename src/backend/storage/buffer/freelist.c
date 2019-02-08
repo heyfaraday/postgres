@@ -613,7 +613,7 @@ if (rand()%500 == 78) {
 			victimCandidate = buf->id_of_prev;
 			if (victimCandidate == -1)
 			{
-				victimCandidate = StrategyControl->lastBufferLogical;
+				victimCandidate = rand() % NBuffers;//StrategyControl->lastBufferLogical;
 			}
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 		}
