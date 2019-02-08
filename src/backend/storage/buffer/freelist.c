@@ -222,10 +222,6 @@ RemoveBufferOnStart(BufferDesc* buf) {
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 			return;
 		}
-		
-		if (StrategyControl->firstBufferLogical == StrategyControl->separatingBufferLogical) {
-			fprintf(stderr, "firstBufferLogical == separatingBufferLogical\n");
-		}
 
 		/*if (buf_next->buf_id < buf_prev->buf_id) {
 			local_bufnext_state = LockBufHdr(buf_next);
@@ -283,6 +279,7 @@ RemoveBufferOnStart(BufferDesc* buf) {
 		
 		if (!success) {
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+			elog(ERROR, "not success");
 			continue;
 		}
 	
@@ -291,6 +288,7 @@ RemoveBufferOnStart(BufferDesc* buf) {
 			//UnlockBufHdr(currentMaster, local_curmaster_state);
 			
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+			elog(ERROR, "NOOOOOOOO");
 			continue;
 		}
 		
@@ -537,26 +535,16 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 		}
 	}
 
-
-SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
-if (GetBufferDescriptor(StrategyControl->firstBufferLogical)->id_of_prev != -1)
-{
-	printf("\n\n\nlbl%i fbl%i LLLLL\n", StrategyControl->lastBufferLogical, StrategyControl->firstBufferLogical);
-	int co = 0;
-	for (victimCandidate = StrategyControl->firstBufferLogical; victimCandidate != -1; victimCandidate = tempBuf->id_of_next) {
-		if (victimCandidate >= 0) 
-			tempBuf = GetBufferDescriptor(victimCandidate);
-		fprintf(stderr, "%i.%i-%i.%i:%i\n", victimCandidate, BUF_STATE_GET_REFCOUNT(pg_atomic_read_u32(&tempBuf->state)), tempBuf->id_of_prev, tempBuf->id_of_next, co++);
-	}
-	fflush(stdout);
-	return GetBufferDescriptor(StrategyControl->firstBufferLogical);
-}	
-SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 	/* Nothing on the freelist, so run the "clock sweep" algorithm */
 	trycounter = NBuffers;
 	victimCandidate = StrategyControl->lastBufferLogical;
 	for (;;)
 	{
+		if (victimCandidate == -1) 
+		{
+			elog(ERROR, "VICTIM CANDIDATE IS OUT OF RANGE((((((((((((((");
+		}
+		
 		buf = GetBufferDescriptor(victimCandidate);
 
 		/*
@@ -602,7 +590,7 @@ SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 				 * infinite loop.
 				 */
 				UnlockBufHdr(buf, local_buf_state);
-				SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+				/*SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 				victimCandidate = StrategyControl->firstBufferLogical;
 				tempBuf = GetBufferDescriptor(victimCandidate);
 				int count = 0;
@@ -612,8 +600,9 @@ SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 					fprintf(stderr, "%i.%i-%i.%i:%i\n", victimCandidate, BUF_STATE_GET_REFCOUNT(pg_atomic_read_u32(&tempBuf->state)), tempBuf->id_of_prev, tempBuf->id_of_next, count++);
 				}
 				fprintf(stderr, "\nfbl:%i lbl:%i\n\n", StrategyControl->firstBufferLogical, StrategyControl->lastBufferLogical);
-				SpinLockRelease(&StrategyControl->buffer_strategy_lock);
-				elog(ERROR, "no unpinned buffers available id: %p");
+				SpinLockRelease(&StrategyControl->buffer_strategy_lock);*/
+				
+				elog(ERROR, "no unpinned buffers available id: %p heh");
 			}
 			SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 			victimCandidate = buf->id_of_prev;
