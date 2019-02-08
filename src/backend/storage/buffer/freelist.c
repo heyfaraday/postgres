@@ -415,7 +415,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 	{
 		buf = GetBufferFromRing(strategy, buf_state);
 		if (buf != NULL) {
-			RemoveBufferOnStart(buf);
+			//RemoveBufferOnStart(buf);
 			return buf;
 		}
 	}
@@ -526,10 +526,10 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 	victimCandidate = StrategyControl->lastBufferLogical;
 	for (;;)
 	{
-		/*for (int i = victimCandidate; i >= 0; i = GetBufferDescriptor(i)->id_of_next) {
-			printf("%i\n", i);
+		for (int i = victimCandidate; i >= 0; i = GetBufferDescriptor(i)->id_of_next) {
+			fprintf(stderr, "%i\n", i);
 		}
-		printf("\n");*/
+		fprintf(stderr,"\n");fflush(stdout);
 		buf = GetBufferDescriptor(victimCandidate);
 
 		/*
@@ -546,7 +546,10 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 				local_buf_state -= BUF_USAGECOUNT_ONE;
 
 				trycounter = NBuffers;
+				
+				SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 				victimCandidate = StrategyControl->lastBufferLogical;
+				SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 			}
 			else
 			{
@@ -573,7 +576,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 				 * infinite loop.
 				 */
 				UnlockBufHdr(buf, local_buf_state);
-				elog(ERROR, "no unpinned buffers available YA HZ qqq");
+				elog(ERROR, "no unpinned buffers available YA HZ qqq2");
 			}
 			victimCandidate = buf->id_of_prev;
 		}
