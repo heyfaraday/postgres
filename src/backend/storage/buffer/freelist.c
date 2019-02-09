@@ -109,73 +109,8 @@ static BufferDesc *GetBufferFromRing(BufferAccessStrategy strategy,
 static void AddBufferToRing(BufferAccessStrategy strategy,
 				BufferDesc *buf);
 
-/*
- * ClockSweepTick - Helper routine for StrategyGetBuffer()
- *
- * Move the clock hand one buffer ahead of its current position and return the
- * id of the buffer now under the hand.
- */
 static inline uint32
-ClockSweepTick(void)
-{
-	uint32		victim;
-
-	/*
-	 * Atomically move hand ahead one buffer - if there's several processes
-	 * doing this, this can lead to buffers being returned slightly out of
-	 * apparent order.
-	 */
-	victim =
-		pg_atomic_fetch_add_u32(&StrategyControl->nextVictimBuffer, 1);
-
-	if (victim >= NBuffers)
-	{
-		uint32		originalVictim = victim;
-
-		/* always wrap what we look up in BufferDescriptors */
-		victim = victim % NBuffers;
-
-		/*
-		 * If we're the one that just caused a wraparound, force
-		 * completePasses to be incremented while holding the spinlock. We
-		 * need the spinlock so StrategySyncStart() can return a consistent
-		 * value consisting of nextVictimBuffer and completePasses.
-		 */
-		if (victim == 0)
-		{
-			uint32		expected;
-			uint32		wrapped;
-			bool		success = false;
-
-			expected = originalVictim + 1;
-
-			while (!success)
-			{
-				/*
-				 * Acquire the spinlock while increasing completePasses. That
-				 * allows other readers to read nextVictimBuffer and
-				 * completePasses in a consistent manner which is required for
-				 * StrategySyncStart().  In theory delaying the increment
-				 * could lead to an overflow of nextVictimBuffers, but that's
-				 * highly unlikely and wouldn't be particularly harmful.
-				 */
-				SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
-
-				wrapped = expected % NBuffers;
-
-				success = pg_atomic_compare_exchange_u32(&StrategyControl->nextVictimBuffer,
-														 &expected, wrapped);
-				if (success)
-					StrategyControl->completePasses++;
-				SpinLockRelease(&StrategyControl->buffer_strategy_lock);
-			}
-		}
-	}
-	return victim;
-}
-
-static inline uint32
-ClockSweepTick2(void)
+ClockSweepTickAtTheEnd(void)
 {
 	uint32		oldVictim;
 	uint32		newVictim;
@@ -265,10 +200,6 @@ RemoveBufferOnSeparatingPosition(BufferDesc* buf) {
 	BufferDesc* buf_prev;
 	BufferDesc* currentMaster;
 	BufferDesc* master_prev;
-	/*uint32 local_bufnext_state;
-	uint32 local_bufprev_state;
-	uint32 local_curmaster_state;
-	uint32 local_curmasterprev_state;*/
 	
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 	
@@ -276,6 +207,7 @@ RemoveBufferOnSeparatingPosition(BufferDesc* buf) {
 		buf->buf_id == StrategyControl->separatingBufferLogical
 		|| buf->id_of_next == StrategyControl->separatingBufferLogical 
 		|| buf->id_of_prev == StrategyControl->separatingBufferLogical
+		|| buf->beforeMid
 	) 
 	{
 		SpinLockRelease(&StrategyControl->buffer_strategy_lock);
@@ -509,7 +441,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 					AddBufferToRing(strategy, buf);
 				*buf_state = local_buf_state;
 				
-				RemoveBufferOnStart(buf);
+				RemoveBufferOnSeparatingPosition(buf);
 
 				return buf;
 			}
@@ -531,7 +463,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 				elog(ERROR, "no unpinned buffers available id");
 			}
 			SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
-			victimCandidate = ClockSweepTick2() % NBuffers;
+			victimCandidate = ClockSweepTickAtTheEnd() % NBuffers;
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 		}
 		UnlockBufHdr(buf, local_buf_state);
