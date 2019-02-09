@@ -190,6 +190,7 @@ typedef struct BufferDesc
 	int id_of_prev;
 
 	bool beforeMid;
+	bool inLiveZone;
 
 	LWLock		content_lock;	/* to lock access to buffer contents */
 } BufferDesc;

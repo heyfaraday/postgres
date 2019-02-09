@@ -47,6 +47,7 @@ typedef struct
 	 */
 
 	int separatingBufferLogical;
+	int leaderOfDeathZoneBufferLogical;
 	int firstBufferLogical;
 	int lastBufferLogical;
 
@@ -120,7 +121,7 @@ ClockSweepTickAtTheEnd(void)
 		oldVictim = pg_atomic_read_u32(&StrategyControl->curVictim);
 		newVictim = GetBufferDescriptor(oldVictim)->id_of_next;
 		if (newVictim == NO_LOGICAL_NEIGHBOUR) {
-			newVictim = StrategyControl->separatingBufferLogical;
+			newVictim = StrategyControl->leaderOfDeathZoneBufferLogical;
 		}
 		success = pg_atomic_compare_exchange_u32(&StrategyControl->curVictim, &oldVictim, newVictim);
 	}
@@ -132,8 +133,9 @@ RemoveBufferOnStart(BufferDesc* buf) {
 	BufferDesc* buf_next;
 	BufferDesc* buf_prev;
 	BufferDesc* currentMaster;
+	BufferDesc* currentLeaderOfDeathZone;
 	BufferDesc* currentSeparatingBuffer;
-
+	
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 	
 	if (
@@ -145,8 +147,10 @@ RemoveBufferOnStart(BufferDesc* buf) {
 		return;
 	}
 	
-	currentMaster = GetBufferDescriptor(StrategyControl->firstBufferLogical);
+	currentLeaderOfDeathZone = GetBufferDescriptor(StrategyControl->leaderOfDeathZoneBufferLogical);
 	currentSeparatingBuffer = GetBufferDescriptor(StrategyControl->separatingBufferLogical);
+	currentMaster = GetBufferDescriptor(StrategyControl->firstBufferLogical);
+	
 	if (buf->id_of_next >= 0)
 		buf_next = GetBufferDescriptor(buf->id_of_next);
 	else
@@ -176,7 +180,31 @@ RemoveBufferOnStart(BufferDesc* buf) {
 
 	StrategyControl->firstBufferLogical = buf->buf_id;
 
+	if (!buf->inLiveZone) {
+		
+		
+		
+		
+		buf->inLiveZone = true;
+		buf->beforeMid = true;
+		
+		if (currentLeaderOfDeathZone == buf)
+		{
+			StrategyControl->leaderOfDeathZoneBufferLogical = buf_prev->buf_id;
+			buf_prev->inLiveZone = false;
+		}
+		else
+		{
+			StrategyControl->leaderOfDeathZoneBufferLogical = currentLeaderOfDeathZone->id_of_prev;
+			GetBufferDescriptor(StrategyControl->leaderOfDeathZoneBufferLogical)->inLiveZone = false;
+		}
+	}
+
 	if (!buf->beforeMid) {
+		
+		
+		
+		
 		buf->beforeMid = true;
 		
 		if (currentSeparatingBuffer == buf) 
@@ -200,12 +228,12 @@ RemoveBufferOnSeparatingPosition(BufferDesc* buf) {
 	BufferDesc* buf_prev;
 	BufferDesc* currentMaster;
 	BufferDesc* master_prev;
+	BufferDesc* currentLeaderOfDeathZone;
 	
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 	
 	if (	
 		buf->buf_id == StrategyControl->separatingBufferLogical
-		|| buf->id_of_next == StrategyControl->separatingBufferLogical 
 		|| buf->id_of_prev == StrategyControl->separatingBufferLogical
 		|| buf->beforeMid
 	) 
@@ -214,6 +242,10 @@ RemoveBufferOnSeparatingPosition(BufferDesc* buf) {
 		return;
 	}
 	
+	/*
+	 * Init 
+	 */
+	currentLeaderOfDeathZone = GetBufferDescriptor(StrategyControl->leaderOfDeathZoneBufferLogical);
 	currentMaster = GetBufferDescriptor(StrategyControl->separatingBufferLogical);
 	
 	if (buf->id_of_next >= 0) 
@@ -222,12 +254,28 @@ RemoveBufferOnSeparatingPosition(BufferDesc* buf) {
 		buf_next = NULL;
 		
 	buf_prev = GetBufferDescriptor(buf->id_of_prev);
+	
 	master_prev = GetBufferDescriptor(currentMaster->id_of_prev);
 
-	if (currentMaster == buf || currentMaster == buf_prev || currentMaster == buf_next) 
+	/*
+	 * More efficiently to skip bump if we want to bump only
+	 * on one position. Moreover, code is clearer in this way.
+	 */
+	if (currentMaster == buf_prev) 
 	{
 		SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 		return;
+	}
+	
+	/*
+	 * We just do it here because of all the next operations do not
+	 * touch currentLeaderOfDeathZone.
+	 */
+	if (currentLeaderOfDeathZone == buf) {
+		buf->inLiveZone = true;
+		buf_prev->inLiveZone = false;
+		
+		StrategyControl->leaderOfDeathZoneBufferLogical = currentLeaderOfDeathZone->id_of_prev;
 	}
 	
 	if (buf->id_of_next >= 0) 
@@ -249,6 +297,16 @@ RemoveBufferOnSeparatingPosition(BufferDesc* buf) {
 	master_prev->id_of_next = buf->buf_id;
 	
 	StrategyControl->separatingBufferLogical = buf->buf_id;
+	
+	/*
+	 * Now we consider only case when buf != currentLeaderOfDeathZone
+	 * (see that case (by the way excepting current case) earlier).
+	 */
+	if (!buf->inLiveZone) 
+	{
+		GetBufferDescriptor(currentLeaderOfDeathZone->id_of_prev)->inLiveZone = false;
+		StrategyControl->leaderOfDeathZoneBufferLogical = currentLeaderOfDeathZone->id_of_prev;
+	}
 	
 	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 }
@@ -629,10 +687,11 @@ StrategyInitialize(bool init)
 		StrategyControl->lastBufferLogical = NBuffers - 1;
 		
 		StrategyControl->separatingBufferLogical = NBuffers * 5 / 8;
+		StrategyControl->leaderOfDeathZoneBufferLogical = NBuffers * 7 / 8;
 
 		/* Initialize the clock sweep pointer */
 		pg_atomic_init_u32(&StrategyControl->nextVictimBuffer, 0);
-		pg_atomic_init_u32(&StrategyControl->curVictim, NBuffers * 7 / 8);
+		pg_atomic_init_u32(&StrategyControl->curVictim, StrategyControl->leaderOfDeathZoneBufferLogical);
 		
 		/* Clear statistics */
 		StrategyControl->completePasses = 0;
