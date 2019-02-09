@@ -1053,7 +1053,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		}
 		else
 		{
-			RemoveBufferOnStart(buf);
+			AddToQueuePush(buf, START_POSITION_CODE);
 		}
 
 		return buf;

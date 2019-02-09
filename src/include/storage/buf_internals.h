@@ -248,6 +248,15 @@ extern PGDLLIMPORT LWLockMinimallyPadded *BufferIOLWLockArray;
 #define NO_LOGICAL_NEIGHBOUR (-1)
 
 /*
+ * Constants for pool of lazy rises
+ */
+#define PUSH_POOL_SIZE (256)
+#define FREE_SLOT_TO_PUSH (-1)
+#define START_POSITION_CODE (1)
+#define SEPARATING_POSITION_CODE (2)
+#define NO_POSITION_TO_PUSH (-1)
+
+/*
  * Functions for acquiring/releasing a shared buffer header's spinlock.  Do
  * not apply these to local buffers!
  */

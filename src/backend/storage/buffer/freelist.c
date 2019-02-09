@@ -52,7 +52,12 @@ typedef struct
 	int lastBufferLogical;
 
 	pg_atomic_uint32 curVictim;
-
+	
+	slock_t pushPoolLock;
+	int curTailIndexPushPool;
+	int buffersToPush[PUSH_POOL_SIZE];
+	int pushPositionCode[PUSH_POOL_SIZE];
+	
 	/*
 	 * Statistics.  These counters should be wide enough that they can't
 	 * overflow during a single bgwriter cycle.
@@ -129,21 +134,22 @@ ClockSweepTickAtTheEnd(void)
 }
 
 void
-RemoveBufferOnStart(BufferDesc* buf) {
+RemoveBufferOnStart(BufferDesc* buf) 
+{
 	BufferDesc* buf_next;
 	BufferDesc* buf_prev;
 	BufferDesc* currentMaster;
 	BufferDesc* currentLeaderOfDeathZone;
 	BufferDesc* currentSeparatingBuffer;
 	
-	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+	//SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 	
 	if (
 		buf->id_of_prev == NO_LOGICAL_NEIGHBOUR 
 		|| buf->id_of_prev == StrategyControl->firstBufferLogical
 	)
 	{
-		SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+		//SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 		return;
 	}
 	
@@ -159,7 +165,7 @@ RemoveBufferOnStart(BufferDesc* buf) {
 
 	if (currentMaster == buf || currentMaster == buf_prev) 
 	{
-		SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+		//SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 		return;
 	}
 	
@@ -219,18 +225,19 @@ RemoveBufferOnStart(BufferDesc* buf) {
 		}
 	}
 	
-	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+	//SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 }
 
 void
-RemoveBufferOnSeparatingPosition(BufferDesc* buf) {
+RemoveBufferOnSeparatingPosition(BufferDesc* buf) 
+{
 	BufferDesc* buf_next;
 	BufferDesc* buf_prev;
 	BufferDesc* currentMaster;
 	BufferDesc* master_prev;
 	BufferDesc* currentLeaderOfDeathZone;
 	
-	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+	//SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 	
 	if (	
 		buf->buf_id == StrategyControl->separatingBufferLogical
@@ -238,7 +245,7 @@ RemoveBufferOnSeparatingPosition(BufferDesc* buf) {
 		|| buf->beforeMid
 	) 
 	{
-		SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+		//SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 		return;
 	}
 	
@@ -263,7 +270,7 @@ RemoveBufferOnSeparatingPosition(BufferDesc* buf) {
 	 */
 	if (currentMaster == buf_prev) 
 	{
-		SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+		//SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 		return;
 	}
 	
@@ -306,6 +313,38 @@ RemoveBufferOnSeparatingPosition(BufferDesc* buf) {
 	{
 		GetBufferDescriptor(currentLeaderOfDeathZone->id_of_prev)->inLiveZone = false;
 		StrategyControl->leaderOfDeathZoneBufferLogical = currentLeaderOfDeathZone->id_of_prev;
+	}
+	
+	//SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+}
+
+void
+AddToQueuePush(BufferDesc *buf, int code) 
+{
+	int i;
+	
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+
+	StrategyControl->buffersToPush[StrategyControl->curTailIndexPushPool] = buf->buf_id;
+	StrategyControl->pushPositionCode[StrategyControl->curTailIndexPushPool] = code;
+	++StrategyControl->curTailIndexPushPool;
+	
+	if (StrategyControl->curTailIndexPushPool == PUSH_POOL_SIZE) 
+	{
+		for (i = 0; i < PUSH_POOL_SIZE; ++i) 
+		{
+			if (StrategyControl->pushPositionCode[i] == START_POSITION_CODE)
+			{
+				RemoveBufferOnStart(buf);
+			} 
+			else
+			{
+				RemoveBufferOnSeparatingPosition(buf);
+			}
+			StrategyControl->buffersToPush[i] = FREE_SLOT_TO_PUSH;
+			StrategyControl->pushPositionCode[i] = NO_POSITION_TO_PUSH;
+		}
+		StrategyControl->curTailIndexPushPool = 0;
 	}
 	
 	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
@@ -359,7 +398,6 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 	{
 		buf = GetBufferFromRing(strategy, buf_state);
 		if (buf != NULL) {
-			//RemoveBufferOnStart(buf);
 			return buf;
 		}
 	}
@@ -499,7 +537,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 					AddBufferToRing(strategy, buf);
 				*buf_state = local_buf_state;
 				
-				RemoveBufferOnSeparatingPosition(buf);
+				AddToQueuePush(buf, SEPARATING_POSITION_CODE);
 
 				return buf;
 			}
@@ -669,6 +707,8 @@ StrategyInitialize(bool init)
 
 	if (!found)
 	{
+		int i;
+		
 		/*
 		 * Only done once, usually in postmaster
 		 */
@@ -692,7 +732,14 @@ StrategyInitialize(bool init)
 		/* Initialize the clock sweep pointer */
 		pg_atomic_init_u32(&StrategyControl->nextVictimBuffer, 0);
 		pg_atomic_init_u32(&StrategyControl->curVictim, StrategyControl->leaderOfDeathZoneBufferLogical);
-		
+		StrategyControl->curTailIndexPushPool = 0;
+
+		for (i = 0; i < PUSH_POOL_SIZE; ++i)
+		{
+			StrategyControl->buffersToPush[i] = FREE_SLOT_TO_PUSH;
+			StrategyControl->pushPositionCode[i] = NO_POSITION_TO_PUSH;
+		}
+
 		/* Clear statistics */
 		StrategyControl->completePasses = 0;
 		pg_atomic_init_u32(&StrategyControl->numBufferAllocs, 0);
