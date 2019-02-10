@@ -53,8 +53,8 @@ typedef struct
 
 	pg_atomic_uint32 curVictim;
 	
-	slock_t pushPoolLock;
-	int curTailIndexPushPool;
+	//slock_t pushPoolLock;
+	pg_atomic_uint32 curTailIndexPushPool;
 	int buffersToPush[PUSH_POOL_SIZE];
 	int pushPositionCode[PUSH_POOL_SIZE];
 	
@@ -323,7 +323,7 @@ AddToQueuePush(BufferDesc *buf, int code)
 {
 	int i;
 	
-	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+	/*SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 
 	StrategyControl->buffersToPush[StrategyControl->curTailIndexPushPool] = buf->buf_id;
 	StrategyControl->pushPositionCode[StrategyControl->curTailIndexPushPool] = code;
@@ -347,7 +347,56 @@ AddToQueuePush(BufferDesc *buf, int code)
 		StrategyControl->curTailIndexPushPool = 0;
 	}
 	
-	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+	SpinLockRelease(&StrategyControl->buffer_strategy_lock);*/
+
+	int success;
+	int oldPosition;
+	int newPosition;
+	
+	success = false;
+	while (!success) 
+	{
+		oldPosition = pg_atomic_fetch_add_u32(&StrategyControl->curTailIndexPushPool, 1);
+		if (oldPosition >= PUSH_POOL_SIZE) 
+		{
+			SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+			newPosition = pg_atomic_read_u32(&StrategyControl->curTailIndexPushPool);
+			if (newPosition >= PUSH_POOL_SIZE) 
+			{
+				BufferDesc *tempBuf;
+				
+				for (i = 0; i < PUSH_POOL_SIZE; ++i) 
+				{
+					tempBuf = GetBufferDescriptor(StrategyControl->buffersToPush[i]);
+					if (StrategyControl->pushPositionCode[i] == START_POSITION_CODE)
+					{
+						RemoveBufferOnStart(tempBuf);
+					} 
+					else if (StrategyControl->pushPositionCode[i] == SEPARATING_POSITION_CODE)
+					{
+						RemoveBufferOnSeparatingPosition(tempBuf);
+					}
+					else
+					{
+						--i;
+						continue;
+					}
+					StrategyControl->buffersToPush[i] = FREE_SLOT_TO_PUSH;
+					StrategyControl->pushPositionCode[i] = NO_POSITION_TO_PUSH;
+				}			
+				pg_atomic_write_u32(&StrategyControl->curTailIndexPushPool, 0);
+			}
+			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+			success = false;
+		}
+		else
+		{
+			StrategyControl->buffersToPush[oldPosition] = buf->buf_id;
+			StrategyControl->pushPositionCode[oldPosition] = code;
+			
+			success = true;
+		}
+	}
 }
 
 /*
@@ -732,7 +781,7 @@ StrategyInitialize(bool init)
 		/* Initialize the clock sweep pointer */
 		pg_atomic_init_u32(&StrategyControl->nextVictimBuffer, 0);
 		pg_atomic_init_u32(&StrategyControl->curVictim, StrategyControl->leaderOfDeathZoneBufferLogical);
-		StrategyControl->curTailIndexPushPool = 0;
+		pg_atomic_init_u32(&StrategyControl->curTailIndexPushPool, 0);
 
 		for (i = 0; i < PUSH_POOL_SIZE; ++i)
 		{
