@@ -1,0 +1,4 @@
+comment = 'Test code for Frequency sketch library'
+default_version = '1.0'
+module_pathname = '$libdir/test_frequency_sketch'
+relocatable = true
