@@ -113,37 +113,43 @@ static void AddBufferToRing(BufferAccessStrategy strategy,
 static inline uint32
 ClockSweepTickEnd(void)
 {
-	uint32		oldVictim;
-	uint32		newVictim;
+	uint32		oldVictimId;
+	uint32		newVictimId;
 	bool success = false;
+	BufferDesc *oldVictimBuf;
 	
 	while (!success) { 
-		oldVictim = pg_atomic_read_u32(&StrategyControl->curVictimEnd);
-		newVictim = GetBufferDescriptor(oldVictim)->id_of_next;
-		if (newVictim == NO_LOGICAL_NEIGHBOUR) {
-			newVictim = StrategyControl->leaderOfDeathZoneBufferLogical;
+		oldVictimBuf = GetBufferDescriptor(oldVictimId);
+		
+		oldVictimId = pg_atomic_read_u32(&StrategyControl->curVictimEnd);
+		newVictimId = oldVictimBuf->id_of_next;
+		if (newVictimId == NO_LOGICAL_NEIGHBOUR || oldVictimBuf->inLiveZone) {
+			newVictimId = StrategyControl->leaderOfDeathZoneBufferLogical;
 		}
-		success = pg_atomic_compare_exchange_u32(&StrategyControl->curVictimEnd, &oldVictim, newVictim);
+		success = pg_atomic_compare_exchange_u32(&StrategyControl->curVictimEnd, &oldVictimId, newVictimId);
 	}
-	return newVictim;
+	return newVictimId;
 }
 
 static inline uint32
-ClockSweepTickBeginning()
+ClockSweepTickBeginning(void)
 {
-	uint32		oldVictim;
-	uint32		newVictim;
+	uint32		oldVictimId;
+	uint32		newVictimId;
 	bool success = false;
+	BufferDesc *oldVictimBuf;
 	
 	while (!success) { 
-		oldVictim = pg_atomic_read_u32(&StrategyControl->curVictimBeginning);
-		newVictim = GetBufferDescriptor(oldVictim)->id_of_prev;
-		if (newVictim == NO_LOGICAL_NEIGHBOUR) {
-			newVictim = GetBufferDescriptor(StrategyControl->leaderOfDeathZoneBufferLogical)->id_of_prev;
+		oldVictimBuf = GetBufferDescriptor(oldVictimId);
+		
+		oldVictimId = pg_atomic_read_u32(&StrategyControl->curVictimBeginning);
+		newVictimId = GetBufferDescriptor(oldVictimId)->id_of_prev;
+		if (newVictimId == NO_LOGICAL_NEIGHBOUR || !oldVictimBuf->inLiveZone) {
+			newVictimId = GetBufferDescriptor(StrategyControl->leaderOfDeathZoneBufferLogical)->id_of_prev;
 		}
-		success = pg_atomic_compare_exchange_u32(&StrategyControl->curVictimBeginning, &oldVictim, newVictim);
+		success = pg_atomic_compare_exchange_u32(&StrategyControl->curVictimBeginning, &oldVictimId, newVictimId);
 	}
-	return newVictim;
+	return newVictimId;
 }
 
 void
