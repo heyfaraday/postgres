@@ -51,8 +51,8 @@ typedef struct
 	int firstBufferLogical;
 	int lastBufferLogical;
 
-	pg_atomic_uint32 curVictim;
-
+	pg_atomic_uint32 curVictimEnd;
+	pg_atomic_uint32 curVictimBeginning;
 	/*
 	 * Statistics.  These counters should be wide enough that they can't
 	 * overflow during a single bgwriter cycle.
@@ -111,19 +111,37 @@ static void AddBufferToRing(BufferAccessStrategy strategy,
 				BufferDesc *buf);
 
 static inline uint32
-ClockSweepTickAtTheEnd(void)
+ClockSweepTickEnd(void)
 {
 	uint32		oldVictim;
 	uint32		newVictim;
 	bool success = false;
 	
 	while (!success) { 
-		oldVictim = pg_atomic_read_u32(&StrategyControl->curVictim);
+		oldVictim = pg_atomic_read_u32(&StrategyControl->curVictimEnd);
 		newVictim = GetBufferDescriptor(oldVictim)->id_of_next;
 		if (newVictim == NO_LOGICAL_NEIGHBOUR) {
 			newVictim = StrategyControl->leaderOfDeathZoneBufferLogical;
 		}
-		success = pg_atomic_compare_exchange_u32(&StrategyControl->curVictim, &oldVictim, newVictim);
+		success = pg_atomic_compare_exchange_u32(&StrategyControl->curVictimEnd, &oldVictim, newVictim);
+	}
+	return newVictim;
+}
+
+static inline uint32
+ClockSweepTickBeginning()
+{
+	uint32		oldVictim;
+	uint32		newVictim;
+	bool success = false;
+	
+	while (!success) { 
+		oldVictim = pg_atomic_read_u32(&StrategyControl->curVictimBeginning);
+		newVictim = GetBufferDescriptor(oldVictim)->id_of_prev;
+		if (newVictim == NO_LOGICAL_NEIGHBOUR) {
+			newVictim = GetBufferDescriptor(StrategyControl->leaderOfDeathZoneBufferLogical)->id_of_prev;
+		}
+		success = pg_atomic_compare_exchange_u32(&StrategyControl->curVictimBeginning, &oldVictim, newVictim);
 	}
 	return newVictim;
 }
@@ -350,6 +368,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 	int victimCandidate;
 	BufferDesc *tempBuf;
 	pg_atomic_uint32 curVictim;
+	bool searchAtTheEnd;
 	
 	/*
 	 * If given a strategy object, see whether it can select a buffer. We
@@ -466,7 +485,8 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 	}
 
 	/* Nothing on the freelist, so run the "clock sweep" algorithm */
-	trycounter = NBuffers;
+	searchAtTheEnd = true;
+	trycounter = NBuffers * 3 / 8;
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 	victimCandidate = StrategyControl->lastBufferLogical;
 	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
@@ -517,11 +537,17 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 				 * infinite loop.
 				 */
 				UnlockBufHdr(buf, local_buf_state);
+				if (!searchAtTheEnd)
+					elog(ERROR, "no unpinned buffers available");
 				
-				elog(ERROR, "no unpinned buffers available id");
+				trycounter = NBuffers * 7 / 8;
+				searchAtTheEnd = false;
 			}
 			SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
-			victimCandidate = ClockSweepTickAtTheEnd() % NBuffers;
+			if (searchAtTheEnd)
+				victimCandidate = ClockSweepTickBeginning() % NBuffers;
+			else
+				victimCandidate = ClockSweepTickEnd() % NBuffers;
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 		}
 		UnlockBufHdr(buf, local_buf_state);
@@ -691,7 +717,9 @@ StrategyInitialize(bool init)
 
 		/* Initialize the clock sweep pointer */
 		pg_atomic_init_u32(&StrategyControl->nextVictimBuffer, 0);
-		pg_atomic_init_u32(&StrategyControl->curVictim, StrategyControl->leaderOfDeathZoneBufferLogical);
+		pg_atomic_init_u32(&StrategyControl->curVictimEnd, StrategyControl->leaderOfDeathZoneBufferLogical);
+		pg_atomic_init_u32(&StrategyControl->curVictimBeginning, 
+			StrategyControl->leaderOfDeathZoneBufferLogical - 1);
 		
 		/* Clear statistics */
 		StrategyControl->completePasses = 0;
