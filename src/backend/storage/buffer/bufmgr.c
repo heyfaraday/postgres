@@ -1051,6 +1051,10 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				*foundPtr = false;
 			}
 		}
+		else
+		{
+			AddToQueuePush(buf, START_POSITION_CODE);
+		}
 
 		return buf;
 	}
