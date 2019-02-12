@@ -132,6 +132,10 @@ InitBufferPool(void)
 			 */
 			buf->freeNext = i + 1;
 
+			buf->carListType = BUF_CAR_NOT_IN_LIST;
+			buf->bufIdNext = i + 1;
+			buf->bufIdPrev = CAR_LIST_END;
+
 			LWLockInitialize(BufferDescriptorGetContentLock(buf),
 							 LWTRANCHE_BUFFER_CONTENT);
 

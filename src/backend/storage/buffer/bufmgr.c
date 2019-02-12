@@ -1028,6 +1028,16 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 		valid = PinBuffer(buf, strategy);
 
+		if (buf->carListType == BUF_CAR_RECENCY_HISTORY
+			|| buf->carListType == BUF_CAR_FREQUENCY_HISTORY)
+		{
+			PromoteBufferFromHistory(buf);
+		}
+		else
+		{
+			buf->accessBit = true;
+		}
+
 		/* Can release the mapping lock as soon as we've pinned it */
 		LWLockRelease(newPartitionLock);
 
@@ -1060,6 +1070,8 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	 * buffer.  Remember to unlock the mapping lock while doing the work.
 	 */
 	LWLockRelease(newPartitionLock);
+
+	//TODO: this pidor may deny buffer selected by our algo in this loop
 
 	/* Loop here in case we have to try another victim buffer */
 	for (;;)
@@ -1239,6 +1251,16 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			buf = GetBufferDescriptor(buf_id);
 
 			valid = PinBuffer(buf, strategy);
+
+			if (buf->carListType == BUF_CAR_RECENCY_HISTORY
+				|| buf->carListType == BUF_CAR_FREQUENCY_HISTORY)
+			{
+				PromoteBufferFromHistory(buf);
+			}
+			else
+			{
+				buf->accessBit = true;
+			}
 
 			/* Can release the mapping lock as soon as we've pinned it */
 			LWLockRelease(newPartitionLock);
@@ -1604,8 +1626,10 @@ PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy)
 			if (strategy == NULL)
 			{
 				/* Default case: increase usagecount unless already max. */
+				// if (BUF_STATE_GET_USAGECOUNT(buf_state) == 0)
 				if (BUF_STATE_GET_USAGECOUNT(buf_state) < BM_MAX_USAGE_COUNT)
 					buf_state += BUF_USAGECOUNT_ONE;
+//				buf_state |= BUF_ACCESS_BIT;
 			}
 			else
 			{
@@ -1678,6 +1702,7 @@ PinBuffer_Locked(BufferDesc *buf)
 	buf_state = pg_atomic_read_u32(&buf->state);
 	Assert(buf_state & BM_LOCKED);
 	buf_state += BUF_REFCOUNT_ONE;
+//    buf_state |= BUF_ACCESS_BIT;
 	UnlockBufHdr(buf, buf_state);
 
 	b = BufferDescriptorGetBuffer(buf);

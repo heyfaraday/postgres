@@ -22,6 +22,29 @@
 
 #define INT_ACCESS_ONCE(var)	((int)(*((volatile int *)&(var))))
 
+typedef struct CarClockList
+{
+	int head;
+	int tail;
+	int size;
+	CarListType carListType;
+} CarClockList;
+
+typedef struct CarLruList
+{
+	int head;
+	int tail;
+	int size;
+	CarListType carListType;
+} CarLruList;
+
+#define INIT_CAR_LIST(a, xx_type) \
+( \
+	(a).head = CAR_LIST_END, \
+	(a).tail = CAR_LIST_END, \
+	(a).size = 0, \
+	(a).carListType = xx_type \
+)
 
 /*
  * The shared freelist control information.
@@ -41,10 +64,20 @@ typedef struct
 	int			firstFreeBuffer;	/* Head of list of unused buffers */
 	int			lastFreeBuffer; /* Tail of list of unused buffers */
 
+	int 		freeBufferStart;
+
 	/*
 	 * NOTE: lastFreeBuffer is undefined when firstFreeBuffer is -1 (that is,
 	 * when the list is empty)
 	 */
+
+	CarClockList	recencyClockList;
+	CarClockList	frequencyClockList;
+	CarLruList		recencyHistoryList;
+	CarLruList		frequencyHistoryList;
+
+	int		cacheCapacity;
+	int		targetSize;
 
 	/*
 	 * Statistics.  These counters should be wide enough that they can't
@@ -58,6 +91,8 @@ typedef struct
 	 * StrategyNotifyBgWriter.
 	 */
 	int			bgwprocno;
+
+	slock_t		car_global_lock;
 } BufferStrategyControl;
 
 /* Pointers to shared state */
@@ -102,6 +137,7 @@ static BufferDesc *GetBufferFromRing(BufferAccessStrategy strategy,
 				  uint32 *buf_state);
 static void AddBufferToRing(BufferAccessStrategy strategy,
 				BufferDesc *buf);
+static bool CheckBufferSize();
 
 /*
  * ClockSweepTick - Helper routine for StrategyGetBuffer()
@@ -168,6 +204,13 @@ ClockSweepTick(void)
 	return victim;
 }
 
+static bool
+CheckClockListSize()
+{
+	return StrategyControl->recencyClockList.size + StrategyControl->frequencyClockList.size
+			== StrategyControl->cacheCapacity;
+}
+
 /*
  * have_free_buffer -- a lockless check to see if there is a free buffer in
  *					   buffer pool.
@@ -183,6 +226,281 @@ have_free_buffer()
 		return true;
 	else
 		return false;
+}
+
+//should be called under lock
+void
+PushToClockList(BufferDesc *buf, CarClockList *car_clock_list)
+{
+	if (car_clock_list->head == CAR_LIST_END)
+	{
+		car_clock_list->head = buf->buf_id;
+	}
+	else
+	{
+		BufferDesc *tail_buf;
+		tail_buf = GetBufferDescriptor(car_clock_list->tail);
+		tail_buf->bufIdNext = buf->buf_id;
+	}
+
+	buf->carListType = car_clock_list->carListType;
+	buf->bufIdNext = car_clock_list->head;
+	buf->bufIdPrev = CAR_LIST_END;
+
+    car_clock_list->tail = buf->buf_id;
+
+	car_clock_list->size += 1;
+}
+
+//should be called under lock
+void
+EraseFromClockList(CarClockList *car_clock_list)
+{
+	BufferDesc *tail_buf;
+	BufferDesc *head_buf;
+
+	Assert(car_clock_list->size != 0
+			&& car_clock_list->head != CAR_LIST_END
+			&& car_clock_list->tail != CAR_LIST_END);
+
+	tail_buf = GetBufferDescriptor(car_clock_list->tail);
+	head_buf = GetBufferDescriptor(car_clock_list->head);
+
+	if (head_buf->bufIdNext == head_buf->buf_id)
+	{
+		car_clock_list->head = CAR_LIST_END;
+		car_clock_list->tail = CAR_LIST_END;
+	}
+	else
+	{
+		tail_buf->bufIdNext = head_buf->bufIdNext;
+		car_clock_list->head = head_buf->bufIdNext;
+	}
+
+	head_buf->bufIdNext = CAR_LIST_END;
+	head_buf->carListType = BUF_CAR_NOT_IN_LIST;
+
+	car_clock_list->size -= 1;
+}
+
+
+//should be called under lock
+void
+MakeBufferHistoryMru(BufferDesc *buf, CarLruList *car_history_list)
+{
+	BufferDesc *head_buf;
+	uint32		buf_state;
+
+	buf->carListType = car_history_list->carListType;
+	buf->bufIdNext = CAR_LIST_END;
+	buf->bufIdPrev = car_history_list->head;
+
+	if (car_history_list->head != CAR_LIST_END)
+	{
+		head_buf = GetBufferDescriptor(car_history_list->head);
+		buf_state = LockBufHdr(head_buf);
+		head_buf->bufIdNext = buf->buf_id;
+		UnlockBufHdr(head_buf, buf_state);
+	}
+
+	car_history_list->head = buf->buf_id;
+	car_history_list->size += 1;
+}
+
+//should be called under lock
+void
+EraseFromHistoryList(BufferDesc *buf, CarLruList *car_lru_list)
+{
+	BufferDesc *prev_buf;
+	BufferDesc *next_buf;
+
+	if (buf->bufIdPrev != CAR_LIST_END)
+	{
+		prev_buf = GetBufferDescriptor(buf->bufIdPrev);
+		prev_buf->bufIdNext = buf->bufIdNext;
+	}
+	else
+	{
+		car_lru_list->tail = buf->bufIdNext;
+	}
+
+	if (buf->bufIdNext != CAR_LIST_END)
+	{
+		next_buf = GetBufferDescriptor(buf->bufIdNext);
+		next_buf->bufIdPrev = buf->bufIdPrev;
+	}
+	else
+	{
+		car_lru_list->head = buf->bufIdPrev;
+	}
+
+	buf->carListType = BUF_CAR_NOT_IN_LIST;
+	buf->bufIdNext = CAR_LIST_END;
+	buf->bufIdPrev = CAR_LIST_END;
+
+	car_lru_list->size -= 1;
+}
+
+//should be called under lock
+int
+RemoveLruHistoryPosition(CarLruList *car_lru_list)
+{
+	BufferDesc *lru_buffer;
+	int 		lru_buffer_id;
+
+	Assert(car_lru_list->tail != CAR_LIST_END);
+
+	lru_buffer_id = car_lru_list->tail;
+	lru_buffer = GetBufferDescriptor(car_lru_list->tail);
+	EraseFromHistoryList(lru_buffer, car_lru_list);
+
+	return lru_buffer_id;
+}
+
+//should be called under lock
+void
+AdvanceCarClock(CarClockList *car_clock_list)
+{
+	BufferDesc *head_buf;
+
+	Assert(car_clock_list->size != 0
+			&& car_clock_list->head != CAR_LIST_END
+			&& car_clock_list->tail != CAR_LIST_END);
+
+	head_buf = GetBufferDescriptor(car_clock_list->head);
+
+	car_clock_list->head = head_buf->bufIdNext;
+	car_clock_list->tail = head_buf->buf_id;
+}
+
+bool
+MoveFromFrequencyCache()
+{
+	int victim_element;
+	BufferDesc *buf;
+
+	AdvanceCarClock(&StrategyControl->frequencyClockList);
+	victim_element = StrategyControl->frequencyClockList.head;
+	buf = GetBufferDescriptor(victim_element);
+
+	if (buf->accessBit == true)
+	{
+		buf->accessBit = false;
+		return false;
+	}
+	else
+	{
+		EraseFromClockList(&StrategyControl->frequencyClockList);
+		MakeBufferHistoryMru(buf, &StrategyControl->frequencyHistoryList);
+		return true;
+	}
+}
+
+bool
+MoveFromRecencyCache()
+{
+	int victim_element;
+	BufferDesc *buf;
+
+	AdvanceCarClock(&StrategyControl->recencyClockList);
+	victim_element = StrategyControl->recencyClockList.head;
+	buf = GetBufferDescriptor(victim_element);
+
+	if (buf->accessBit == true)
+	{
+		buf->accessBit = false;
+		EraseFromClockList(&StrategyControl->recencyClockList);
+		PushToClockList(buf, &StrategyControl->frequencyClockList);
+		return false;
+	}
+	else
+	{
+		EraseFromClockList(&StrategyControl->recencyClockList);
+		MakeBufferHistoryMru(buf, &StrategyControl->recencyHistoryList);
+		return true;
+	}
+}
+
+void
+DemoteEntryFromCache()
+{
+	if (StrategyControl->recencyClockList.size
+		+ StrategyControl->frequencyClockList.size
+		< StrategyControl->cacheCapacity)
+	{
+		return;
+	}
+
+	while (true)
+	{
+		if (StrategyControl->recencyClockList.size >= Max(1, StrategyControl->targetSize))
+		{
+			if (MoveFromRecencyCache())
+			{
+				return;
+			}
+		}
+		else
+		{
+			if (MoveFromFrequencyCache())
+			{
+				return;
+			}
+		}
+	}
+}
+
+int
+EvictFromHistory()
+{
+	if (StrategyControl->recencyClockList.size
+		+ StrategyControl->recencyHistoryList.size
+		== StrategyControl->cacheCapacity)
+	{
+		return RemoveLruHistoryPosition(&StrategyControl->recencyHistoryList);
+	}
+	else if(StrategyControl->recencyClockList.size
+			+ StrategyControl->recencyHistoryList.size
+			+ StrategyControl->frequencyClockList.size
+			+ StrategyControl->frequencyClockList.size
+			== NBuffers)
+	{
+		return RemoveLruHistoryPosition(&StrategyControl->frequencyHistoryList);
+	}
+
+	return -1;
+}
+
+void
+PromoteBufferFromHistory(BufferDesc *buf)
+{
+	int growth_factor;
+
+	SpinLockAcquire(&StrategyControl->car_global_lock);
+
+	DemoteEntryFromCache();
+
+	if (buf->carListType == BUF_CAR_RECENCY_HISTORY)
+	{
+		growth_factor = StrategyControl->frequencyHistoryList.size / StrategyControl->recencyHistoryList.size;
+		growth_factor = Max(1, growth_factor);
+		StrategyControl->targetSize = Min(StrategyControl->targetSize + growth_factor, StrategyControl->cacheCapacity);
+
+		EraseFromHistoryList(buf, &StrategyControl->recencyHistoryList);
+	}
+	else
+	{
+		growth_factor = StrategyControl->recencyHistoryList.size / StrategyControl->frequencyHistoryList.size;
+		growth_factor = Max(1, growth_factor);
+		StrategyControl->targetSize = Max(StrategyControl->targetSize - growth_factor, 0);
+
+		EraseFromHistoryList(buf, &StrategyControl->frequencyHistoryList);
+	}
+
+	buf->accessBit = false;
+	PushToClockList(buf, &StrategyControl->frequencyClockList);
+
+	SpinLockRelease(&StrategyControl->car_global_lock);
 }
 
 /*
@@ -214,6 +532,11 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 		buf = GetBufferFromRing(strategy, buf_state);
 		if (buf != NULL)
 			return buf;
+	}
+
+	if (strategy == NULL)
+	{
+		SpinLockAcquire(&StrategyControl->car_global_lock);
 	}
 
 	/*
@@ -305,6 +628,30 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 				if (strategy != NULL)
 					AddBufferToRing(strategy, buf);
 				*buf_state = local_buf_state;
+
+				if (buf->carListType == BUF_CAR_RECENCY_HISTORY
+					|| buf->carListType == BUF_CAR_FREQUENCY_HISTORY)
+				{
+					EraseFromHistoryList(
+							buf,
+							buf->carListType == BUF_CAR_RECENCY_HISTORY
+								? &StrategyControl->recencyHistoryList
+								: &StrategyControl->frequencyHistoryList
+					);
+					PushToClockList(buf, &StrategyControl->recencyClockList);
+				}
+				else if (buf->carListType == BUF_CAR_FREQUENCY_LIST
+						 || buf->carListType == BUF_CAR_RECENCY_LIST)
+				{
+					buf->accessBit = true;
+				}
+				else
+				{
+					PushToClockList(buf, &StrategyControl->recencyClockList);
+				}
+
+				SpinLockRelease(&StrategyControl->car_global_lock);
+
 				return buf;
 			}
 			UnlockBufHdr(buf, local_buf_state);
@@ -313,10 +660,20 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 	}
 
 	/* Nothing on the freelist, so run the "clock sweep" algorithm */
-	trycounter = NBuffers;
+	trycounter = StrategyControl->recencyHistoryList.size + StrategyControl->frequencyHistoryList.size;
 	for (;;)
 	{
-		buf = GetBufferDescriptor(ClockSweepTick());
+		int buf_id;
+
+		DemoteEntryFromCache();
+		if ((buf_id = EvictFromHistory()) < 0)
+		{
+			elog(PANIC, "?????????Why freelist is empty, so??????????\n");
+		}
+
+		buf = GetBufferDescriptor(buf_id);
+
+//		buf = GetBufferDescriptor(ClockSweepTick());
 
 		/*
 		 * If the buffer is pinned or has a nonzero usage_count, we cannot use
@@ -326,20 +683,17 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 
 		if (BUF_STATE_GET_REFCOUNT(local_buf_state) == 0)
 		{
-			if (BUF_STATE_GET_USAGECOUNT(local_buf_state) != 0)
-			{
-				local_buf_state -= BUF_USAGECOUNT_ONE;
+			/* Found a usable buffer */
+			if (strategy != NULL)
+				AddBufferToRing(strategy, buf);
+			*buf_state = local_buf_state;
 
-				trycounter = NBuffers;
-			}
-			else
-			{
-				/* Found a usable buffer */
-				if (strategy != NULL)
-					AddBufferToRing(strategy, buf);
-				*buf_state = local_buf_state;
-				return buf;
-			}
+			buf->accessBit = false;
+			PushToClockList(buf, &StrategyControl->recencyClockList);
+
+			SpinLockRelease(&StrategyControl->car_global_lock);
+
+			return buf;
 		}
 		else if (--trycounter == 0)
 		{
@@ -350,6 +704,12 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 			 * probably better to fail than to risk getting stuck in an
 			 * infinite loop.
 			 */
+			MakeBufferHistoryMru(
+					buf,
+					buf->carListType == BUF_CAR_RECENCY_HISTORY
+						? &StrategyControl->recencyHistoryList
+						: &StrategyControl->frequencyHistoryList
+			);
 			UnlockBufHdr(buf, local_buf_state);
 			elog(ERROR, "no unpinned buffers available");
 		}
@@ -504,6 +864,7 @@ StrategyInitialize(bool init)
 		Assert(init);
 
 		SpinLockInit(&StrategyControl->buffer_strategy_lock);
+		SpinLockInit(&StrategyControl->car_global_lock);
 
 		/*
 		 * Grab the whole linked list of free buffers for our strategy. We
@@ -521,6 +882,16 @@ StrategyInitialize(bool init)
 
 		/* No pending notification */
 		StrategyControl->bgwprocno = -1;
+
+		INIT_CAR_LIST(StrategyControl->recencyClockList, BUF_CAR_RECENCY_LIST);
+		INIT_CAR_LIST(StrategyControl->frequencyClockList, BUF_CAR_FREQUENCY_LIST);
+		INIT_CAR_LIST(StrategyControl->recencyHistoryList, BUF_CAR_RECENCY_HISTORY);
+		INIT_CAR_LIST(StrategyControl->frequencyHistoryList, BUF_CAR_FREQUENCY_HISTORY);
+
+		StrategyControl->cacheCapacity = NBuffers / 2;
+		StrategyControl->targetSize = 0;
+
+		StrategyControl->freeBufferStart = 0;
 	}
 	else
 		Assert(!init);

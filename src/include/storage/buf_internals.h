@@ -40,10 +40,11 @@
  */
 #define BUF_REFCOUNT_ONE 1
 #define BUF_REFCOUNT_MASK ((1U << 18) - 1)
-#define BUF_USAGECOUNT_MASK 0x003C0000U
+#define BUF_USAGECOUNT_MASK 0x001C0000U
 #define BUF_USAGECOUNT_ONE (1U << 18)
 #define BUF_USAGECOUNT_SHIFT 18
 #define BUF_FLAG_MASK 0xFFC00000U
+#define BUF_ACCESS_BIT (1U << 21)
 
 /* Get refcount and usagecount from buffer state */
 #define BUF_STATE_GET_REFCOUNT(state) ((state) & BUF_REFCOUNT_MASK)
@@ -132,6 +133,17 @@ typedef struct buftag
 #define BufMappingPartitionLockByIndex(i) \
 	(&MainLWLockArray[BUFFER_MAPPING_LWLOCK_OFFSET + (i)].lock)
 
+typedef enum CarListType
+{
+	BUF_CAR_NOT_IN_LIST,
+	BUF_CAR_RECENCY_LIST,
+	BUF_CAR_FREQUENCY_LIST,
+	BUF_CAR_RECENCY_HISTORY,
+	BUF_CAR_FREQUENCY_HISTORY
+} CarListType;
+
+#define CAR_LIST_END (-1)
+
 /*
  *	BufferDesc -- shared descriptor/state data for a single shared buffer.
  *
@@ -185,6 +197,12 @@ typedef struct BufferDesc
 
 	int			wait_backend_pid;	/* backend PID of pin-count waiter */
 	int			freeNext;		/* link in freelist chain */
+
+	CarListType		carListType;
+	int			bufIdNext;
+	int			bufIdPrev;
+
+	bool		accessBit;
 
 	LWLock		content_lock;	/* to lock access to buffer contents */
 } BufferDesc;
@@ -318,6 +336,7 @@ extern void StrategyNotifyBgWriter(int bgwprocno);
 extern Size StrategyShmemSize(void);
 extern void StrategyInitialize(bool init);
 extern bool have_free_buffer(void);
+extern void PromoteBufferFromHistory(BufferDesc *buf);
 
 /* buf_table.c */
 extern Size BufTableShmemSize(int size);
