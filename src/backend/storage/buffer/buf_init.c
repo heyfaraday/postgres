@@ -132,7 +132,7 @@ InitBufferPool(void)
 				buf->id_of_next = -1;
 
 			buf->beforeMid = (buf->buf_id < NBuffers * 5 / 8);
-			buf->inLiveZone = (buf->buf_id < NBuffers * 65 / 80);			
+			buf->inLiveZone = (buf->buf_id < NBuffers * 75 / 80);			
 
 			/*
 			 * Initially link all the buffers together as unused. Subsequent
