@@ -687,7 +687,7 @@ StrategyInitialize(bool init)
 		StrategyControl->lastBufferLogical = NBuffers - 1;
 		
 		StrategyControl->separatingBufferLogical = NBuffers * 5 / 8;
-		StrategyControl->leaderOfDeathZoneBufferLogical = NBuffers * 7 / 8;
+		StrategyControl->leaderOfDeathZoneBufferLogical = NBuffers * 65 / 80;
 
 		/* Initialize the clock sweep pointer */
 		pg_atomic_init_u32(&StrategyControl->nextVictimBuffer, 0);
