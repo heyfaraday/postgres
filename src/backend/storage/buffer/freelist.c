@@ -449,8 +449,8 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 			 * of 8.3, but we'd better check anyway.)
 			 */
 			local_buf_state = LockBufHdr(buf);
-			if (BUF_STATE_GET_REFCOUNT(local_buf_state) == 0
-				&& BUF_STATE_GET_USAGECOUNT(local_buf_state) == 0)
+			if (BUF_STATE_GET_REFCOUNT(local_buf_state) == 0)
+				//&& BUF_STATE_GET_USAGECOUNT(local_buf_state) == 0)
 			{
 				if (strategy != NULL)
 					AddBufferToRing(strategy, buf);
@@ -482,7 +482,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 
 		if (BUF_STATE_GET_REFCOUNT(local_buf_state) == 0)
 		{
-			if (BUF_STATE_GET_USAGECOUNT(local_buf_state) != 0)
+			/*if (BUF_STATE_GET_USAGECOUNT(local_buf_state) != 0)
 			{
 				local_buf_state -= BUF_USAGECOUNT_ONE;
 
@@ -492,7 +492,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 				victimCandidate = StrategyControl->lastBufferLogical;
 				SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 			}
-			else
+			else*/
 			{
 				/* Found a usable buffer */
 				if (strategy != NULL)
@@ -820,8 +820,8 @@ GetBufferFromRing(BufferAccessStrategy strategy, uint32 *buf_state)
 	 */
 	buf = GetBufferDescriptor(bufnum - 1);
 	local_buf_state = LockBufHdr(buf);
-	if (BUF_STATE_GET_REFCOUNT(local_buf_state) == 0
-		&& BUF_STATE_GET_USAGECOUNT(local_buf_state) <= 1)
+	if (BUF_STATE_GET_REFCOUNT(local_buf_state) == 0)
+		//&& BUF_STATE_GET_USAGECOUNT(local_buf_state) <= 1)
 	{
 		strategy->current_was_in_ring = true;
 		*buf_state = local_buf_state;
