@@ -186,9 +186,11 @@ typedef struct BufferDesc
 	int			wait_backend_pid;	/* backend PID of pin-count waiter */
 	int			freeNext;		/* link in freelist chain */
 
+	/* Indeces of next and previous buffers in logical sequence */
 	int id_of_next;
 	int id_of_prev;
 
+	/* Not including separating buffers */
 	bool beforeMid;
 	bool inLiveZone;
 
