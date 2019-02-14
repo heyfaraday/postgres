@@ -204,11 +204,13 @@ ClockSweepTick(void)
 	return victim;
 }
 
-static bool
-CheckClockListSize()
+static int
+GetClockListSize()
 {
-	return StrategyControl->recencyClockList.size + StrategyControl->frequencyClockList.size
-			== StrategyControl->cacheCapacity;
+	return StrategyControl->recencyClockList.size
+	        + StrategyControl->frequencyClockList.size
+	        + StrategyControl->frequencyHistoryList.size
+	        + StrategyControl->recencyHistoryList.size;
 }
 
 /*
@@ -421,12 +423,21 @@ MoveFromRecencyCache()
 	}
 }
 
+static int was_here = 0;
+
 void
 DemoteEntryFromCache()
 {
-	if (StrategyControl->recencyClockList.size
+    elog(WARNING, "CAR: full size: %d", GetClockListSize());
+    elog(WARNING, "CAR: recencyClock size: %d", StrategyControl->recencyClockList.size);
+    elog(WARNING, "CAR: frequencyClock size: %d", StrategyControl->frequencyClockList.size);
+    elog(WARNING, "CAR: recencyHistory size: %d", StrategyControl->recencyHistoryList.size);
+    elog(WARNING, "CAR: frequencyHistory size: %d", StrategyControl->frequencyHistoryList.size);
+    was_here++;
+
+    if (StrategyControl->recencyClockList.size
 		+ StrategyControl->frequencyClockList.size
-		< StrategyControl->cacheCapacity)
+		!= StrategyControl->cacheCapacity)
 	{
 		return;
 	}
@@ -453,11 +464,23 @@ DemoteEntryFromCache()
 int
 EvictFromHistory()
 {
+//    elog(WARNING, "CAR: NBuffers: %d", NBuffers);
+//    elog(WARNING, "CAR: cacheCapacity: %d", StrategyControl->cacheCapacity);
+//    elog(WARNING, "CAR: full size: %d", GetClockListSize());
+//    elog(WARNING, "CAR: recencyClock size: %d", StrategyControl->recencyClockList.size);
+//    elog(WARNING, "CAR: frequencyClock size: %d", StrategyControl->frequencyClockList.size);
+//    elog(WARNING, "CAR: recencyHistory size: %d", StrategyControl->recencyHistoryList.size);
+//    elog(WARNING, "CAR: frequencyHistory size: %d", StrategyControl->frequencyHistoryList.size);
+//    elog(WARNING, "CAR: was here: %d", was_here);
+
 	if (StrategyControl->recencyClockList.size
 		+ StrategyControl->recencyHistoryList.size
 		== StrategyControl->cacheCapacity)
 	{
-		return RemoveLruHistoryPosition(&StrategyControl->recencyHistoryList);
+	    int x;
+		x = RemoveLruHistoryPosition(&StrategyControl->recencyHistoryList);
+//      elog(WARNING, "CAR: removing from recency history %d", x);
+        return x;
 	}
 	else if(StrategyControl->recencyClockList.size
 			+ StrategyControl->recencyHistoryList.size
@@ -465,7 +488,10 @@ EvictFromHistory()
 			+ StrategyControl->frequencyClockList.size
 			== NBuffers)
 	{
-		return RemoveLruHistoryPosition(&StrategyControl->frequencyHistoryList);
+	    int x;
+	    x = RemoveLruHistoryPosition(&StrategyControl->frequencyHistoryList);
+//	    elog(WARNING, "CAR: removing from frequency history %d", x);
+		return x;
 	}
 
 	return -1;
@@ -622,8 +648,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 			 * of 8.3, but we'd better check anyway.)
 			 */
 			local_buf_state = LockBufHdr(buf);
-			if (BUF_STATE_GET_REFCOUNT(local_buf_state) == 0
-				&& BUF_STATE_GET_USAGECOUNT(local_buf_state) == 0)
+			if (BUF_STATE_GET_REFCOUNT(local_buf_state) == 0)
 			{
 				if (strategy != NULL)
 					AddBufferToRing(strategy, buf);
@@ -647,6 +672,13 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 				}
 				else
 				{
+				    if (StrategyControl->recencyClockList.size
+				        + StrategyControl->frequencyClockList.size
+				        == StrategyControl->cacheCapacity)
+                    {
+                        DemoteEntryFromCache();
+                        EvictFromHistory();
+                    }
 					PushToClockList(buf, &StrategyControl->recencyClockList);
 				}
 
@@ -668,6 +700,14 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 		DemoteEntryFromCache();
 		if ((buf_id = EvictFromHistory()) < 0)
 		{
+//		    if (StrategyControl->recencyHistoryList.size > StrategyControl->frequencyHistoryList.size)
+//            {
+//                buf_id = RemoveLruHistoryPosition(&StrategyControl->recencyHistoryList);
+//            }
+//		    else
+//            {
+//		        buf_id = RemoveLruHistoryPosition(&StrategyControl->frequencyHistoryList);
+//            }
 			elog(PANIC, "?????????Why freelist is empty, so??????????\n");
 		}
 
